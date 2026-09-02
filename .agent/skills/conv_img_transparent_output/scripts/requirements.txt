@@ -1,0 +1,6 @@
+numpy>=1.24
+Pillow>=10.0
+pymatting>=1.1.12
+onnxruntime>=1.16
+rembg[cpu]>=2.0
+# Optional: torch only if you re-run train_unmix.py
