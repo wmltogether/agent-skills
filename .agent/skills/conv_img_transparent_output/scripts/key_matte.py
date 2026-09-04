@@ -130,18 +130,33 @@ def suppress_chroma_alpha(rgb: np.ndarray, alpha: np.ndarray, bg_name: str, hard
     return np.clip(alpha * (1.0 - kill), 0.0, 1.0)
 
 
-def channel_despill(rgb: np.ndarray, bg_name: str) -> np.ndarray:
-    """Pull chroma toward the opposite channel. No /alpha (that oversaturates)."""
+def matte_core(alpha: np.ndarray, radius: int = 3) -> np.ndarray:
+    """Interior of the subject. rembg often leaves the core at α≈254 — do not treat α<1 as fringe."""
+    size = max(3, 2 * radius + 1)
+    mask = (np.clip(alpha, 0.0, 1.0) >= 0.5).astype(np.uint8) * 255
+    return np.array(Image.fromarray(mask, "L").filter(ImageFilter.MinFilter(size))) > 127
+
+
+def channel_despill(rgb: np.ndarray, bg_name: str, alpha: np.ndarray | None = None) -> np.ndarray:
+    """Pull chroma on the matte fringe only. Interior RGB stays as generated. No /alpha."""
+    if bg_name not in ("magenta", "green"):
+        return rgb
     out = rgb.copy()
     r, g, b = out[:, :, 0], out[:, :, 1], out[:, :, 2]
+    spill = chroma_spill_score(rgb, bg_name)
+    pulled = out.copy()
     if bg_name == "magenta":
         excess = np.clip(np.minimum(r, b) - g, 0.0, 255.0)
-        out[:, :, 0] = np.clip(r - excess, 0.0, 255.0)
-        out[:, :, 2] = np.clip(b - excess, 0.0, 255.0)
-    elif bg_name == "green":
+        pulled[:, :, 0] = np.clip(r - excess, 0.0, 255.0)
+        pulled[:, :, 2] = np.clip(b - excess, 0.0, 255.0)
+    else:
         excess = np.clip(g - np.maximum(r, b), 0.0, 255.0)
-        out[:, :, 1] = np.clip(g - excess, 0.0, 255.0)
-    return out
+        pulled[:, :, 1] = np.clip(g - excess, 0.0, 255.0)
+    if alpha is None:
+        w = np.clip(spill / 28.0, 0.0, 1.0)
+    else:
+        w = (~matte_core(alpha)).astype(np.float32) * np.clip(spill / 28.0, 0.0, 1.0)
+    return out * (1.0 - w[..., None]) + pulled * w[..., None]
 
 
 def cap_saturation(rgb: np.ndarray, alpha: np.ndarray, amount: float) -> np.ndarray:
@@ -222,9 +237,8 @@ def finish(
     fg_pred: np.ndarray | None = None,
 ) -> np.ndarray:
     alpha = suppress_chroma_alpha(rgb, alpha, bg_name, hard, fade)
-    fg = fg_pred if fg_pred is not None else channel_despill(rgb, bg_name)
-    if fg_pred is not None:
-        fg = channel_despill(fg, bg_name)
+    fg = rgb if fg_pred is None else fg_pred
+    fg = channel_despill(fg, bg_name, alpha)
     fg = cap_saturation(fg, alpha, sat)
     rgba = np.dstack([fg, np.clip(alpha * 255.0, 0.0, 255.0)])
     img = Image.fromarray(np.round(rgba).astype(np.uint8), "RGBA")
@@ -295,7 +309,12 @@ def main() -> None:
     p.add_argument("--outer", type=float, default=80.0)
     p.add_argument("--min-keep", type=int, default=1500)
     p.add_argument("--blur", type=float, default=0.45)
-    p.add_argument("--sat", type=float, default=1.0, help="HSV saturation scale; 1 keeps gen colors, <1 mutes")
+    p.add_argument(
+        "--sat",
+        type=float,
+        default=1.0,
+        help="1 keeps generated colors (icons/default). Pass 0.72 only to mute winter sprites. Never >1.",
+    )
     p.add_argument("--hard", type=float, default=28.0, help="spill above this starts killing alpha (enclosed holes)")
     p.add_argument("--fade", type=float, default=72.0, help="spill at/above this is fully transparent")
     args = p.parse_args()
