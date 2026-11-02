@@ -1,0 +1,4 @@
+interface:
+  display_name: "前端设计"
+  short_description: "基于业务内容构建有辨识度的前端界面，克制装饰并清除无意义占位文案"
+  default_prompt: "使用 $frontend-design，结合现有项目规范设计并实现界面，删除无意义的占位词、优先级标签和冗长功能介绍。"
